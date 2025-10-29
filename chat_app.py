@@ -1,4 +1,8 @@
+# -*- coding: utf-8 -*-
+
 import streamlit as st
+import google.generativeai as genai
+# ... (以下、残りのコードはそのまま)import streamlit as st
 import google.generativeai as genai
 import notion_client
 import os
