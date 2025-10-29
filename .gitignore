@@ -1,0 +1,5 @@
+# Googleの秘密鍵 (全ての.jsonファイルを無視)
+*.json
+
+# Pythonの仮想環境
+myapp_env/
