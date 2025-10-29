@@ -1,4 +1,6 @@
 # -*- coding: utf-8 -*-
+# Re-saving as UTF-8 
+
 import streamlit as st
 import google.generativeai as genai
 import notion_client
