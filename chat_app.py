@@ -127,7 +127,7 @@ def add_event_to_calendar(service, event_details):
         return None
 
 # --- メイン画面 ---
-st.title("🤖 Gemini 一元管理システム (Cloud Ver)")
+st.title("AI haku via Gemini")
 st.success("各APIクライアントの初期化が完了しました。")
 
 if "messages" not in st.session_state:
