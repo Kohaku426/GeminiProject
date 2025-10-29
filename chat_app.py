@@ -11,7 +11,7 @@ from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
 
 # --- Constants ---
-GOOGLE_SCOPES = ['https://www.googleapis.com/auth/calendar']
+GOOGLE_SCOPES = ['https.www.googleapis.com/auth/calendar']
 # IMPORTANT: Change this to your actual service account JSON file name
 GOOGLE_SERVICE_ACCOUNT_FILE = 'gemini-calendar.json' 
 
@@ -50,8 +50,8 @@ try:
         try:
             with open(GOOGLE_SERVICE_ACCOUNT_FILE, 'r', encoding='utf-8') as f:
                 creds_dict = json.load(f)
-            creds = service_account.Credentials.from_service_account_info(
-                creds_dict, scopes=GOOGLE_SCOPES
+            creds = service_account.Credentials.from_service_account_file(
+                GOOGLE_SERVICE_ACCOUNT_FILE, scopes=GOOGLE_SCOPES
             )
         except Exception as e:
             st.error(f"Failed to load local JSON key ({GOOGLE_SERVICE_ACCOUNT_FILE}): {e}")
@@ -71,7 +71,7 @@ def add_task_to_notion(task_name, due_date=None):
     if not notion: return False
     try:
         # NOTE: If your Notion Title property name is not "名前" (Name), change it here:
-        # If your Notion Date property name is not "日付", change it here:
+        # If your Notion Date property name is not "日付" (Date), change it here:
         title_property_name = "名前"
         date_property_name = "日付"
         
@@ -273,14 +273,17 @@ if prompt := st.chat_input("（例: 「明日の15時にBさんとミーティ�
                 action = parsed_info.get("action")
                 summary = parsed_info.get("summary")
                 
-                # ★★★ 〆切・期限の優先ロジック ★★★
-                DEADLINE_KEYWORDS = ["〆切", "期限", "提出", "締切", "期日"]
-                is_deadline = any(k in (summary or "") for k in DEADLINE_KEYWORDS)
+                # ★★★ 〆切・期限の優先ロジック (メール本文全体をチェック) ★★★
+                DEADLINE_KEYWORDS = ["〆切", "期限", "提出", "締切", "期日", "受検", "受領"]
                 
-                # 'event'と判定されたが、サマリーに〆切キーワードが含まれる場合は'task'に上書き
+                # FIX: summaryではなく、元のprompt_lowerでキーワードをチェック
+                is_deadline = any(k in prompt_lower for k in DEADLINE_KEYWORDS)
+                
+                # 'event'と判定されたが、メール本文に〆切キーワードが含まれる場合は'task'に上書き
                 if is_deadline and action == "event":
                     action = "task"
-                    st.warning(f"「{summary}」に〆切キーワードが含まれるため、予定ではなくタスクとして扱います。")
+                    st.warning(f"メール内容に「〆切/受検/提出」などのキーワードが含まれるため、予定ではなくタスクとして扱います。")
+                    
                     # eventのstart_timeから日付部分を抽出し、タスクの期日に設定
                     start_time = parsed_info.get("start_time")
                     due_date = start_time.split('T')[0] if start_time else None
