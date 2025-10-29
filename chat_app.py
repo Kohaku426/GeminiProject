@@ -245,6 +245,43 @@ if prompt := st.chat_input("（例: 「明日の15時にBさんとミーティ�
             else:
                 response_text = "予定の抽出に失敗しました。日時を明確にして再度お試しください。"
 
+        elif "email" in prompt_lower or "mail" in prompt_lower:
+            st.info("Analyzing email body for task/event creation...")
+    
+            # Use the new comprehensive parser
+            parsed_info = parse_email_with_gemini(gemini_model, prompt)
+    
+            if not parsed_info:
+                response_text = "Failed to extract structured data from the email."
+    
+            # --- Action Dispatch ---
+            elif parsed_info.get("action") == "event":
+                # Prepare data for Calendar function (requires specific keys)
+                event_details = {
+                    "summary": parsed_info.get("summary"),
+                    "start_time": parsed_info.get("start_time"),
+                    "end_time": parsed_info.get("end_time"),
+                }
+                event_link = add_event_to_calendar(gcal_service, event_details)
+                if event_link:
+                    response_text = f"Successfully added event '{event_details['summary']}' to Google Calendar. \n[View Event]({event_link})"
+                else:
+                    response_text = "Failed to add event to Google Calendar."
+            
+        elif parsed_info.get("action") == "task" and parsed_info.get("summary"):
+            # Prepare data for Notion function (requires specific keys)
+            task_name = parsed_info.get("summary")
+            due_date = parsed_info.get("date")
+        
+            if add_task_to_notion(task_name, due_date):
+                due_date_str = f" (Due: {due_date})" if due_date else ""
+                response_text = f"Successfully added task '{task_name}'{due_date_str} to Notion."
+            else:
+                response_text = "Failed to add task to Notion."
+
+        else:
+            response_text = "Email analysis complete, but no clear event or task was identified."
+
         elif gemini_model:
             try:
                 response = gemini_model.generate_content(prompt)
@@ -256,3 +293,38 @@ if prompt := st.chat_input("（例: 「明日の15時にBさんとミーティ�
         
         st.markdown(response_text)
         st.session_state.messages.append({"role": "assistant", "content": response_text})
+
+# --- New: Parse Email for both Task and Calendar Event ---
+def parse_email_with_gemini(model, email_body):
+    if not model: return None
+    now = datetime.datetime.now(datetime.timezone.utc).isoformat()
+
+    # ★★★ IMPORTANT: This prompt asks Gemini to return a specific JSON structure ★★★
+    system_prompt = f"""
+    The user will provide an email body. Extract the main task/event and its details into a single JSON object. 
+    
+    Current Date/Time: {now}
+    
+    Required JSON Structure (Return only this JSON object):
+    {{
+      "action": "task" or "event" (Choose "event" if a specific date/time is mentioned, otherwise choose "task"),
+      "summary": "Main subject or task description",
+      "date": "YYYY-MM-DD" or null (Required if action is "task"),
+      "start_time": "YYYY-MM-DDTHH:MM:SS" or null (Required if action is "event"),
+      "end_time": "YYYY-MM-DDTHH:MM:SS" or null (Required if action is "event"; default 1 hour later if only start is present)
+    }}
+
+    Rules:
+    - If a specific day/time is found (e.g., 'Meeting tomorrow at 10 AM'), set action to "event".
+    - If only a general chore is found (e.g., 'Please follow up on the report'), set action to "task".
+    - Use {now} to interpret relative dates.
+    - Respond ONLY with the JSON object, inside ```json ... ```.
+    """
+    
+    try:
+        response = model.generate_content([system_prompt, email_body])
+        json_text = response.text.strip().replace("```json", "").replace("```", "")
+        return json.loads(json_text)
+    except Exception as e:
+        st.error(f"Gemini email parsing failed: {e}\n\nGemini response:\n{response.text}")
+        return None
