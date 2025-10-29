@@ -167,18 +167,68 @@ if prompt := st.chat_input("（例: 「明日の15時にBさんとミーティ�
         response_text = ""
         
         # ▼▼▼ 分岐処理 ▼▼▼
-        if notion and ("notion" in prompt.lower() or "タスク" in prompt):
-            st.info("Notion連携を試みています...")
-            extraction_prompt = f"以下の文章から、Notionに追加すべき「タスク名」だけを、前後の説明や記号を一切付けずに抽出してください。タスク名そのものだけを返してください。\n\n原文: {prompt}"
+        # --- Logic branches ---
+        if notion and ("notion" in prompt_lower or "task" in prompt_lower): 
+            st.info("Connecting to Notion...")
+            # ★★★ ↓↓↓ この extraction_prompt を書き換える ↓↓↓ ★★★
+            extraction_prompt = f"""
+            以下の文章から、Notionに追加すべき「タスク名」と「期日」をJSON形式で抽出してください。
+            - task_name: タスクの名称
+            - due_date: 期日 (YYYY-MM-DD形式)。期日が指定されていない場合は null または省略してください。
+
+            ルール:
+            - 現在の日時情報などを参考に、「明日」「来週末」などを具体的なYYYY-MM-DD形式に変換してください。
+            - 抽出したJSONだけを、前後の説明文なしで返してください。
+            - JSONは ```json ... ``` の中に書いてください。
+
+            例1 (期日あり):
+            ユーザー入力: 「牛乳を買うタスクを明日期限で追加」
+            出力:
+            ```json
+            {{
+              "task_name": "牛乳を買う",
+              "due_date": "（明日の日付 YYYY-MM-DD）"
+            }}
+            ```
+
+            例2 (期日なし):
+            ユーザー入力: 「プレゼン資料作成をNotionタスクに」
+            出力:
+            ```json
+            {{
+              "task_name": "プレゼン資料作成",
+              "due_date": null
+            }}
+            ```
+            
+            原文: {prompt}
+            """
+            # ★★★ ↑↑↑ ここまでが新しい extraction_prompt ↑↑↑ ★★★
             try:
                 response = gemini_model.generate_content(extraction_prompt)
-                task_name = response.text.strip().replace("`", "")
-                if add_task_to_notion(task_name):
-                    response_text = f"承知いたしました。タスク「{task_name}」をNotionに追加しました。"
+                
+                # Extract JSON from Gemini response
+                json_text = response.text.strip().replace("```json", "").replace("```", "")
+                task_info = json.loads(json_text)
+                
+                task_name = task_info.get("task_name")
+                due_date = task_info.get("due_date") # Will be None if not found
+
+                if task_name:
+                    # Pass both name and date to the function
+                    if add_task_to_notion(task_name, due_date): 
+                        due_date_str = f" (Due: {due_date})" if due_date else ""
+                        response_text = f"OK. Added task '{task_name}'{due_date_str} to Notion."
+                    else:
+                        response_text = "Failed to add task to Notion."
                 else:
-                    response_text = "Notionへのタスク追加に失敗しました。"
+                    response_text = "Could not extract task name from your request."
+                    
+            except json.JSONDecodeError:
+                 st.error(f"Failed to parse JSON from Gemini.\nGemini response:\n{response.text}")
+                 response_text = "Error parsing task details from Gemini."
             except Exception as e:
-                response_text = f"Geminiでのタスク抽出中にエラーが発生: {e}"
+                response_text = f"Gemini task extraction failed: {e}"
 
         elif gcal_service and ("カレンダー" in prompt or "予定" in prompt):
             st.info("Googleカレンダー連携を試みています...")
