@@ -148,7 +148,7 @@ if prompt := st.chat_input("（例: 「明日の15時にBさんとミーティ�
         # ▼▼▼ 分岐処理 ▼▼▼
         if notion and ("notion" in prompt.lower() or "タスク" in prompt):
             st.info("Notion連携を試みています...")
-            extraction_prompt = f"以下の文章からタスク名を抽出してください。\n\n原文: {prompt}"
+            extraction_prompt = f"以下の文章から、Notionに追加すべき「タスク名」だけを、前後の説明や記号を一切付けずに抽出してください。タスク名そのものだけを返してください。\n\n原文: {prompt}"
             try:
                 response = gemini_model.generate_content(extraction_prompt)
                 task_name = response.text.strip().replace("`", "")
