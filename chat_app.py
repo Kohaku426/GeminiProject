@@ -75,7 +75,7 @@ def add_task_to_notion(task_name, due_date=None): # Added due_date parameter
         # ★★★ ↑↑↑ 例: もしプロパティ名が「期日」なら "期日" にする ↑↑↑ ★★★
         
         properties_payload = {
-            "Name": { "title": [ { "text": { "content": task_name } } ] }
+            "名前": { "title": [ { "text": { "content": task_name } } ] }
         }
         
         # Add date property if due_date exists
