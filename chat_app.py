@@ -25,8 +25,8 @@ try:
     GEMINI_API_KEY = st.secrets.get("GEMINI_API_KEY")
     if GEMINI_API_KEY:
         genai.configure(api_key=GEMINI_API_KEY)
-        # FIX: Changed to existing stable model
-        gemini_model = genai.GenerativeModel('gemini-2.5-pro') # ★★★ ここを 2.5-pro に変更 ★★★
+        # Gemini-2.5-pro をデフォルトとして使用
+        gemini_model = genai.GenerativeModel('gemini-2.5-pro')
     else:
         st.warning("Gemini API key is not set in Streamlit Secrets.")
 
@@ -198,13 +198,13 @@ if prompt := st.chat_input("（例: 「明日の15時にBさんとミーティ�
         if notion and ("notion" in prompt_lower or "task" in prompt_lower): 
             st.info("Connecting to Notion...")
             
-            # ★★★ タスク抽出プロンプト（修正済み） ★★★
+            # ★★★ タスク抽出プロンプト ★★★
             extraction_prompt = f"""
             以下の文章から、Notionに追加すべき「タスク名」と「期日」をJSON形式で抽出してください。
             - task_name: タスクの名称
             - due_date: 期日 (YYYY-MM-DD形式)。期日が指定されていない場合は null または省略してください。
             ルール:
-            - 年が指定されていない場合、現在の年（2025年）を優先し、その日付が過去であれば次の年（2026年）を設定してください。
+            - 年が指定されていない場合、現在の年（{datetime.date.today().year}年）を優先し、その日付が過去であれば次の年（{datetime.date.today().year + 1}年）を設定してください。
             - 現在の日時情報などを参考に、「明日」「来週末」などを具体的なYYYY-MM-DD形式に変換してください。
             - 抽出したJSONだけを、前後の説明文なしで返してください。
             - JSONは ```json ... ``` の中に書いてください。
@@ -215,7 +215,6 @@ if prompt := st.chat_input("（例: 「明日の15時にBさんとミーティ�
 "due_date": "（明日の日付 YYYY-MM-DD）"
 }}
 ```
-
             例2 (期日なし): ユーザー入力: 「プレゼン資料作成をNotionタスクに」出力: 
 ```json
 {{
@@ -223,7 +222,6 @@ if prompt := st.chat_input("（例: 「明日の15時にBさんとミーティ�
 "due_date": null
 }}
 ```
-            
             原文: {prompt}
             """
             
@@ -238,8 +236,8 @@ if prompt := st.chat_input("（例: 「明日の15時にBさんとミーティ�
 
                 if task_name:
                     if add_task_to_notion(task_name, due_date): 
-                        due_date_str = f" (Due: {due_date})" if due_date else ""
-                        response_text = f"OK. Added task '{task_name}'{due_date_str} to Notion."
+                        due_date_str = f" (期日: {due_date})" if due_date else "" # 日本語化
+                        response_text = f"OK. Notionにタスク「{task_name}」{due_date_str}を追加しました。" # 日本語化
                     else:
                         response_text = "Failed to add task to Notion."
                 else:
@@ -264,37 +262,57 @@ if prompt := st.chat_input("（例: 「明日の15時にBさんとミーティ�
                 response_text = "予定の抽出に失敗しました。日時を明確にして再度お試しください。"
 
         elif "email" in prompt_lower or "mail" in prompt_lower:
-            st.info("Analyzing email body for task/event creation...")
+            st.info("メール本文からタスク/予定の作成を分析しています...")
             
             parsed_info = parse_email_with_gemini(gemini_model, prompt)
             
             if not parsed_info:
-                response_text = "Failed to extract structured data from the email."
-            
-            elif parsed_info.get("action") == "event":
-                event_details = {
-                    "summary": parsed_info.get("summary"),
-                    "start_time": parsed_info.get("start_time"),
-                    "end_time": parsed_info.get("end_time"),
-                }
-                event_link = add_event_to_calendar(gcal_service, event_details)
-                if event_link:
-                    response_text = f"Successfully added event '{event_details['summary']}' to Google Calendar. \n[View Event]({event_link})"
-                else:
-                    response_text = "Failed to add event to Google Calendar."
-                    
-            elif parsed_info.get("action") == "task" and parsed_info.get("summary"):
-                task_name = parsed_info.get("summary")
-                due_date = parsed_info.get("date")
+                response_text = "メールから構造化データの抽出に失敗しました。"
                 
-                if add_task_to_notion(task_name, due_date):
-                    due_date_str = f" (Due: {due_date})" if due_date else ""
-                    response_text = f"Successfully added task '{task_name}'{due_date_str} to Notion."
-                else:
-                    response_text = "Failed to add task to Notion."
+            else: 
+                action = parsed_info.get("action")
+                summary = parsed_info.get("summary")
+                
+                # ★★★ 〆切・期限の優先ロジック ★★★
+                DEADLINE_KEYWORDS = ["〆切", "期限", "提出", "締切", "期日"]
+                is_deadline = any(k in (summary or "") for k in DEADLINE_KEYWORDS)
+                
+                # 'event'と判定されたが、サマリーに〆切キーワードが含まれる場合は'task'に上書き
+                if is_deadline and action == "event":
+                    action = "task"
+                    st.warning(f"「{summary}」に〆切キーワードが含まれるため、予定ではなくタスクとして扱います。")
+                    # eventのstart_timeから日付部分を抽出し、タスクの期日に設定
+                    start_time = parsed_info.get("start_time")
+                    due_date = start_time.split('T')[0] if start_time else None
+                    parsed_info["date"] = due_date 
+                    
+                
+                # --- Action Dispatch (Modified) ---
+                if action == "event":
+                    event_details = {
+                        "summary": summary,
+                        "start_time": parsed_info.get("start_time"),
+                        "end_time": parsed_info.get("end_time"),
+                    }
+                    event_link = add_event_to_calendar(gcal_service, event_details)
+                    # 成功メッセージを日本語化
+                    if event_link:
+                        response_text = f"Googleカレンダーに予定「{event_details['summary']}」を追加しました。\n[予定を確認する]({event_link})"
+                    else:
+                        response_text = "Googleカレンダーへの予定追加に失敗しました。"
+                        
+                elif action == "task" and summary:
+                    task_name = summary
+                    due_date = parsed_info.get("date")
+                    
+                    if add_task_to_notion(task_name, due_date):
+                        due_date_str = f" (期日: {due_date})" if due_date else ""
+                        response_text = f"Notionにタスク「{task_name}」{due_date_str}を追加しました。" # 日本語化
+                    else:
+                        response_text = "Notionへのタスク追加に失敗しました。"
 
-            else:
-                response_text = "Email analysis complete, but no clear event or task was identified."
+                else:
+                    response_text = "メール分析の結果、カレンダー予定またはNotionタスクに該当する明確なアクションは見つかりませんでした。" # 日本語化
 
         elif gemini_model:
             try:
