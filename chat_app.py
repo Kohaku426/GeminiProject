@@ -268,19 +268,19 @@ if prompt := st.chat_input("（例: 「明日の15時にBさんとミーティ�
                 else:
                     response_text = "Failed to add event to Google Calendar."
             
-        elif parsed_info.get("action") == "task" and parsed_info.get("summary"):
-            # Prepare data for Notion function (requires specific keys)
-            task_name = parsed_info.get("summary")
-            due_date = parsed_info.get("date")
+            elif parsed_info.get("action") == "task" and parsed_info.get("summary"):
+                # Prepare data for Notion function (requires specific keys)
+                task_name = parsed_info.get("summary")
+                due_date = parsed_info.get("date")
         
-            if add_task_to_notion(task_name, due_date):
-                due_date_str = f" (Due: {due_date})" if due_date else ""
-                response_text = f"Successfully added task '{task_name}'{due_date_str} to Notion."
-            else:
-                response_text = "Failed to add task to Notion."
+                if add_task_to_notion(task_name, due_date):
+                    due_date_str = f" (Due: {due_date})" if due_date else ""
+                    response_text = f"Successfully added task '{task_name}'{due_date_str} to Notion."
+                else:
+                    response_text = "Failed to add task to Notion."
 
-        else:
-            response_text = "Email analysis complete, but no clear event or task was identified."
+            else:
+                response_text = "Email analysis complete, but no clear event or task was identified."
 
         elif gemini_model:
             try:
