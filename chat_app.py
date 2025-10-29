@@ -15,7 +15,7 @@ from googleapiclient.errors import HttpError
 GOOGLE_SCOPES = ['https://www.googleapis.com/auth/calendar']
 # サービスアカウントのJSONキーファイル名 (ステップ1でDLしたもの)
 # ★★★↓ ダウンロードしたJSONファイル名に書き換えてください ↓★★★
-GOOGLE_SERVICE_ACCOUNT_FILE = 'gemini-calendar-app-84b7c1a6da86.json' 
+GOOGLE_SERVICE_ACCOUNT_FILE = 'gemini_key.json' 
 
 # --- APIクライアントの初期化 ---
 gemini_model = None
@@ -51,9 +51,17 @@ try:
         )
     # ローカル環境 (テスト用) の場合
     elif os.path.exists(GOOGLE_SERVICE_ACCOUNT_FILE):
-        creds = service_account.Credentials.from_service_account_file(
-            GOOGLE_SERVICE_ACCOUNT_FILE, scopes=GOOGLE_SCOPES
+        try:
+            # ★★★ 修正点: ファイルを 'utf-8' で明示的に開く ★★★
+            with open(GOOGLE_SERVICE_ACCOUNT_FILE, 'r', encoding='utf-8') as f:
+                creds_dict = json.load(f)
+
+            creds = service_account.Credentials.from_service_account_info(
+                creds_dict, scopes=GOOGLE_SCOPES
         )
+        except Exception as e:
+            st.error(f"ローカルのJSONキーファイル ({GOOGLE_SERVICE_ACCOUNT_FILE}) の読み込みに失敗しました: {e}")
+            creds = None
     else:
         creds = None
         st.error(f"Googleサービスアカウントの認証情報が見つかりません。")
