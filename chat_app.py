@@ -165,6 +165,8 @@ if prompt := st.chat_input("（例: 「明日の15時にBさんとミーティ�
 
     with st.chat_message("assistant"):
         response_text = ""
+
+        prompt_lower = prompt.lower()
         
         # ▼▼▼ 分岐処理 ▼▼▼
         # --- Logic branches ---
