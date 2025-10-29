@@ -10,82 +10,81 @@ from google.oauth2 import service_account
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
 
-# --- 定数 ---
-# Googleカレンダーの操作権限
+# --- Constants ---
 GOOGLE_SCOPES = ['https://www.googleapis.com/auth/calendar']
-# サービスアカウントのJSONキーファイル名 (ステップ1でDLしたもの)
-# ★★★↓ ダウンロードしたJSONファイル名に書き換えてください ↓★★★
+# IMPORTANT: Change this to your actual service account JSON file name
 GOOGLE_SERVICE_ACCOUNT_FILE = 'gemini-calendar.json' 
 
-# --- APIクライアントの初期化 ---
+# --- API Client Initialization ---
 gemini_model = None
 notion = None
 gcal_service = None
 
-# Streamlit CloudのSecretsから情報を読み込む
 try:
-    # --- Geminiの初期化 ---
+    # --- Init Gemini ---
     GEMINI_API_KEY = st.secrets.get("GEMINI_API_KEY")
     if GEMINI_API_KEY:
         genai.configure(api_key=GEMINI_API_KEY)
-        gemini_model = genai.GenerativeModel('gemini-2.5-pro')
+        # FIX: Changed to existing stable model
+        gemini_model = genai.GenerativeModel('gemini-2.5-pro') # ★★★ ここを 2.5-pro に変更 ★★★
     else:
-        st.warning("Gemini APIキーがStreamlit Secretsに設定されていません。")
+        st.warning("Gemini API key is not set in Streamlit Secrets.")
 
-    # --- Notionの初期化 ---
+    # --- Init Notion ---
     NOTION_API_KEY = st.secrets.get("NOTION_API_KEY")
     NOTION_DB_ID = st.secrets.get("NOTION_DB_ID")
     if NOTION_API_KEY and NOTION_DB_ID:
         notion = notion_client.Client(auth=NOTION_API_KEY)
     else:
-        st.warning("Notion APIキーまたはDB IDがStreamlit Secretsに設定されていません。")
+        st.warning("Notion API key or DB ID is not set in Streamlit Secrets.")
 
-    # --- Googleカレンダーの初期化 (サービスアカウント) ---
-    # Streamlit Cloud (本番環境) の場合
+    # --- Init Google Calendar (Service Account) ---
+    creds = None
     if "GOOGLE_CREDENTIALS_JSON_STRING" in st.secrets:
-        # SecretsからJSON文字列を読み込む
         creds_json_str = st.secrets.get("GOOGLE_CREDENTIALS_JSON_STRING")
         creds_dict = json.loads(creds_json_str)
         creds = service_account.Credentials.from_service_account_info(
             creds_dict, scopes=GOOGLE_SCOPES
         )
-    # ローカル環境 (テスト用) の場合
     elif os.path.exists(GOOGLE_SERVICE_ACCOUNT_FILE):
-        creds = service_account.Credentials.from_service_account_file(
-            GOOGLE_SERVICE_ACCOUNT_FILE, scopes=GOOGLE_SCOPES
-        )
+        try:
+            with open(GOOGLE_SERVICE_ACCOUNT_FILE, 'r', encoding='utf-8') as f:
+                creds_dict = json.load(f)
+            creds = service_account.Credentials.from_service_account_info(
+                creds_dict, scopes=GOOGLE_SCOPES
+            )
+        except Exception as e:
+            st.error(f"Failed to load local JSON key ({GOOGLE_SERVICE_ACCOUNT_FILE}): {e}")
     else:
-        creds = None
-        st.error(f"Googleサービスアカウントの認証情報が見つかりません。")
+        st.error("Google Service Account credentials not found.")
 
     if creds:
         gcal_service = build('calendar', 'v3', credentials=creds)
 
 except Exception as e:
-    st.error(f"APIクライアントの初期化中にエラーが発生しました: {e}")
+    st.error(f"Error during API client initialization: {e}")
     st.stop()
 
 
 # --- Notion Function (Modified for Due Date) ---
-def add_task_to_notion(task_name, due_date=None): # Added due_date parameter
+def add_task_to_notion(task_name, due_date=None):
     if not notion: return False
     try:
-        # ★★★ ↓↓↓ あなたのNotionの日付プロパティの名前に書き換えてください ↓↓↓ ★★★
-        date_property_name = "日付" 
-        # ★★★ ↑↑↑ 例: もしプロパティ名が「期日」なら "期日" にする ↑↑↑ ★★★
+        # NOTE: If your Notion Title property name is not "名前" (Name), change it here:
+        # If your Notion Date property name is not "日付", change it here:
+        title_property_name = "名前"
+        date_property_name = "日付"
         
         properties_payload = {
-            "名前": { "title": [ { "text": { "content": task_name } } ] }
+            title_property_name: { "title": [ { "text": { "content": task_name } } ] }
         }
         
-        # Add date property if due_date exists
         if due_date:
             try:
-                # Validate date format (optional but recommended)
                 datetime.datetime.strptime(due_date, '%Y-%m-%d') 
                 properties_payload[date_property_name] = {
                     "date": {
-                        "start": due_date # Needs YYYY-MM-DD format
+                        "start": due_date
                     }
                 }
             except ValueError:
@@ -93,14 +92,14 @@ def add_task_to_notion(task_name, due_date=None): # Added due_date parameter
                 
         notion.pages.create(
             parent={"database_id": NOTION_DB_ID},
-            properties=properties_payload # Use updated properties
+            properties=properties_payload
         )
         return True
     except Exception as e:
         st.error(f"Notion task failed: {e}")
         return False
 
-# --- Googleカレンダー連携関数 (サービスアカウント用に変更) ---
+# --- Googleカレンダー連携関数 ---
 def parse_event_with_gemini(model, text_prompt):
     if not model: return None
     now = datetime.datetime.now(datetime.timezone.utc).isoformat()
@@ -126,25 +125,52 @@ def parse_event_with_gemini(model, text_prompt):
 def add_event_to_calendar(service, event_details):
     if not service: return None
     try:
+        calendar_owner_email = st.secrets.get("CALENDAR_OWNER_EMAIL")
+        if not calendar_owner_email:
+             st.error("CALENDAR_OWNER_EMAIL is not set in Secrets.")
+             return None
+
         event = {
             'summary': event_details['summary'],
             'start': {'dateTime': event_details['start_time'], 'timeZone': 'Asia/Tokyo'},
             'end': {'dateTime': event_details['end_time'], 'timeZone': 'Asia/Tokyo'},
         }
-        # サービスアカウントは「primary」カレンダーを持たないため、
-        # ステップ2で共有したカレンダーのID（通常はあなたのメールアドレス）を指定する
-        calendar_owner_email = st.secrets.get("CALENDAR_OWNER_EMAIL") # Secretsから読み込む
-        if not calendar_owner_email:
-             st.error("カレンダー所有者のメールアドレスがSecretsに設定されていません。")
-             return None
-
         created_event = service.events().insert(
-            calendarId=calendar_owner_email, # 'primary' から変更
+            calendarId=calendar_owner_email,
             body=event
         ).execute()
         return created_event.get('htmlLink')
     except HttpError as error:
         st.error(f"カレンダーへのイベント追加に失敗: {error}")
+        return None
+        
+# --- New: Parse Email for both Task and Calendar Event ---
+def parse_email_with_gemini(model, email_body):
+    if not model: return None
+    now = datetime.datetime.now(datetime.timezone.utc).isoformat()
+    system_prompt = f"""
+    The user will provide an email body. Extract the main task/event and its details into a single JSON object. 
+    Current Date/Time: {now}
+    Required JSON Structure (Return only this JSON object):
+    {{
+      "action": "task" or "event" (Choose "event" if a specific date/time is mentioned, otherwise choose "task"),
+      "summary": "Main subject or task description",
+      "date": "YYYY-MM-DD" or null (Required if action is "task"),
+      "start_time": "YYYY-MM-DDTHH:MM:SS" or null (Required if action is "event"),
+      "end_time": "YYYY-MM-DDTHH:MM:SS" or null (Required if action is "event"; default 1 hour later if only start is present)
+    }}
+    Rules:
+    - If a specific day/time is found (e.g., 'Meeting tomorrow at 10 AM'), set action to "event".
+    - If only a general chore is found (e.g., 'Please follow up on the report'), set action to "task".
+    - Use {now} to interpret relative dates.
+    - Respond ONLY with the JSON object, inside ```json ... ```.
+    """
+    try:
+        response = model.generate_content([system_prompt, email_body])
+        json_text = response.text.strip().replace("```json", "").replace("```", "")
+        return json.loads(json_text)
+    except Exception as e:
+        st.error(f"Gemini email parsing failed: {e}\n\nGemini response:\n{response.text}")
         return None
 
 # --- メイン画面 ---
@@ -165,60 +191,52 @@ if prompt := st.chat_input("（例: 「明日の15時にBさんとミーティ�
 
     with st.chat_message("assistant"):
         response_text = ""
-
         prompt_lower = prompt.lower()
         
         # ▼▼▼ 分岐処理 ▼▼▼
         # --- Logic branches ---
         if notion and ("notion" in prompt_lower or "task" in prompt_lower): 
             st.info("Connecting to Notion...")
-            # ★★★ ↓↓↓ この extraction_prompt を書き換える ↓↓↓ ★★★
+            
+            # ★★★ タスク抽出プロンプト（修正済み） ★★★
             extraction_prompt = f"""
             以下の文章から、Notionに追加すべき「タスク名」と「期日」をJSON形式で抽出してください。
             - task_name: タスクの名称
             - due_date: 期日 (YYYY-MM-DD形式)。期日が指定されていない場合は null または省略してください。
-
             ルール:
-            -**年が指定されていない場合、現在の年（2025年）を優先し、その日付が過去であれば次の年（2026年）を設定してください。
+            - 年が指定されていない場合、現在の年（2025年）を優先し、その日付が過去であれば次の年（2026年）を設定してください。
             - 現在の日時情報などを参考に、「明日」「来週末」などを具体的なYYYY-MM-DD形式に変換してください。
             - 抽出したJSONだけを、前後の説明文なしで返してください。
             - JSONは ```json ... ``` の中に書いてください。
+            例1 (期日あり): ユーザー入力: 「牛乳を買うタスクを明日期限で追加」出力: 
+```json
+{{
+"task_name": "牛乳を買う",
+"due_date": "（明日の日付 YYYY-MM-DD）"
+}}
+```
 
-            例1 (期日あり):
-            ユーザー入力: 「牛乳を買うタスクを明日期限で追加」
-            出力:
-            ```json
-            {{
-              "task_name": "牛乳を買う",
-              "due_date": "（明日の日付 YYYY-MM-DD）"
-            }}
-            ```
-
-            例2 (期日なし):
-            ユーザー入力: 「プレゼン資料作成をNotionタスクに」
-            出力:
-            ```json
-            {{
-              "task_name": "プレゼン資料作成",
-              "due_date": null
-            }}
-            ```
+            例2 (期日なし): ユーザー入力: 「プレゼン資料作成をNotionタスクに」出力: 
+```json
+{{
+"task_name": "プレゼン資料作成",
+"due_date": null
+}}
+```
             
             原文: {prompt}
             """
-            # ★★★ ↑↑↑ ここまでが新しい extraction_prompt ↑↑↑ ★★★
+            
             try:
                 response = gemini_model.generate_content(extraction_prompt)
                 
-                # Extract JSON from Gemini response
                 json_text = response.text.strip().replace("```json", "").replace("```", "")
                 task_info = json.loads(json_text)
                 
                 task_name = task_info.get("task_name")
-                due_date = task_info.get("due_date") # Will be None if not found
+                due_date = task_info.get("due_date")
 
                 if task_name:
-                    # Pass both name and date to the function
                     if add_task_to_notion(task_name, due_date): 
                         due_date_str = f" (Due: {due_date})" if due_date else ""
                         response_text = f"OK. Added task '{task_name}'{due_date_str} to Notion."
@@ -228,8 +246,8 @@ if prompt := st.chat_input("（例: 「明日の15時にBさんとミーティ�
                     response_text = "Could not extract task name from your request."
                     
             except json.JSONDecodeError:
-                 st.error(f"Failed to parse JSON from Gemini.\nGemini response:\n{response.text}")
-                 response_text = "Error parsing task details from Gemini."
+                st.error(f"Failed to parse JSON from Gemini.\nGemini response:\n{response.text}")
+                response_text = "Error parsing task details from Gemini."
             except Exception as e:
                 response_text = f"Gemini task extraction failed: {e}"
 
@@ -247,16 +265,13 @@ if prompt := st.chat_input("（例: 「明日の15時にBさんとミーティ�
 
         elif "email" in prompt_lower or "mail" in prompt_lower:
             st.info("Analyzing email body for task/event creation...")
-    
-            # Use the new comprehensive parser
+            
             parsed_info = parse_email_with_gemini(gemini_model, prompt)
-    
+            
             if not parsed_info:
                 response_text = "Failed to extract structured data from the email."
-    
-            # --- Action Dispatch ---
+            
             elif parsed_info.get("action") == "event":
-                # Prepare data for Calendar function (requires specific keys)
                 event_details = {
                     "summary": parsed_info.get("summary"),
                     "start_time": parsed_info.get("start_time"),
@@ -267,12 +282,11 @@ if prompt := st.chat_input("（例: 「明日の15時にBさんとミーティ�
                     response_text = f"Successfully added event '{event_details['summary']}' to Google Calendar. \n[View Event]({event_link})"
                 else:
                     response_text = "Failed to add event to Google Calendar."
-            
+                    
             elif parsed_info.get("action") == "task" and parsed_info.get("summary"):
-                # Prepare data for Notion function (requires specific keys)
                 task_name = parsed_info.get("summary")
                 due_date = parsed_info.get("date")
-        
+                
                 if add_task_to_notion(task_name, due_date):
                     due_date_str = f" (Due: {due_date})" if due_date else ""
                     response_text = f"Successfully added task '{task_name}'{due_date_str} to Notion."
@@ -290,41 +304,6 @@ if prompt := st.chat_input("（例: 「明日の15時にBさんとミーティ�
                 response_text = f"Geminiからの応答取得中にエラーが発生: {e}"
         else:
             response_text = "Geminiモデルが初期化されていません。"
-        
+            
         st.markdown(response_text)
         st.session_state.messages.append({"role": "assistant", "content": response_text})
-
-# --- New: Parse Email for both Task and Calendar Event ---
-def parse_email_with_gemini(model, email_body):
-    if not model: return None
-    now = datetime.datetime.now(datetime.timezone.utc).isoformat()
-
-    # ★★★ IMPORTANT: This prompt asks Gemini to return a specific JSON structure ★★★
-    system_prompt = f"""
-    The user will provide an email body. Extract the main task/event and its details into a single JSON object. 
-    
-    Current Date/Time: {now}
-    
-    Required JSON Structure (Return only this JSON object):
-    {{
-      "action": "task" or "event" (Choose "event" if a specific date/time is mentioned, otherwise choose "task"),
-      "summary": "Main subject or task description",
-      "date": "YYYY-MM-DD" or null (Required if action is "task"),
-      "start_time": "YYYY-MM-DDTHH:MM:SS" or null (Required if action is "event"),
-      "end_time": "YYYY-MM-DDTHH:MM:SS" or null (Required if action is "event"; default 1 hour later if only start is present)
-    }}
-
-    Rules:
-    - If a specific day/time is found (e.g., 'Meeting tomorrow at 10 AM'), set action to "event".
-    - If only a general chore is found (e.g., 'Please follow up on the report'), set action to "task".
-    - Use {now} to interpret relative dates.
-    - Respond ONLY with the JSON object, inside ```json ... ```.
-    """
-    
-    try:
-        response = model.generate_content([system_prompt, email_body])
-        json_text = response.text.strip().replace("```json", "").replace("```", "")
-        return json.loads(json_text)
-    except Exception as e:
-        st.error(f"Gemini email parsing failed: {e}\n\nGemini response:\n{response.text}")
-        return None
