@@ -1,6 +1,4 @@
 # -*- coding: utf-8 -*-
-# Re-saving as UTF-8 
-
 import streamlit as st
 import google.generativeai as genai
 import notion_client
@@ -15,8 +13,7 @@ from googleapiclient.errors import HttpError
 
 # --- Constants ---
 GOOGLE_SCOPES = ['https://www.googleapis.com/auth/calendar']
-# --- IMPORTANT: Change this to your actual service account JSON file name ---
-GOOGLE_SERVICE_ACCOUNT_FILE = 'gemini_key.json' 
+GOOGLE_SERVICE_ACCOUNT_FILE = 'gemini_key.json' # Your local key file
 
 # --- API Client Initialization ---
 gemini_model = None
@@ -74,9 +71,10 @@ except Exception as e:
 def add_task_to_notion(task_name):
     if not notion: return False
     try:
+        # ★★★ NOTE: Your Notion "Title" property must be named "名前" (Name) ★★★
         notion.pages.create(
             parent={"database_id": NOTION_DB_ID},
-            properties={ "名前": { "title": [ { "text": { "content": task_name } } ] } }
+            properties={ "名前": { "title": [ { "text": { "content": task_name } } ] } } 
         )
         return True
     except Exception as e:
@@ -87,15 +85,17 @@ def add_task_to_notion(task_name):
 def parse_event_with_gemini(model, text_prompt):
     if not model: return None
     now = datetime.datetime.now(datetime.timezone.utc).isoformat()
+    # Gemini prompt can contain Japanese, this is fine
     system_prompt = f"""
-    Extract Google Calendar event info from the user's text as JSON:
-    - summary: Event title
-    - start_time: Event start time (ISO 8601: YYYY-MM-DDTHH:MM:SS)
-    - end_time: Event end time (ISO 8601: YYYY-MM-DDTHH:MM:SS)
-    Rules:
-    - Current time is {now}. Use this to interpret "tomorrow", "next week", etc.
-    - If no end time, assume 1 hour duration.
-    - Respond ONLY with the JSON, inside ```json ... ```.
+    ユーザーの文章から、Googleカレンダーのイベント情報をJSON形式で抽出してください。
+    - summary: イベントの概要
+    - start_time: イベントの開始日時 (ISO 8601形式: YYYY-MM-DDTHH:MM:SS)
+    - end_time: イベントの終了日時 (ISO 8601形式: YYYY-MM-DDTHH:MM:SS)
+    ルール:
+    - 現在の日時は {now} です。これを基準に「明日」「来週」などを解釈してください。
+    - 終了時間が指定されていない場合、開始時間の1時間後を終了時間としてください。
+    - 抽出したJSONだけを、前後の説明文なしで返してください。
+    - JSONは ```json ... ``` の中に書いてください。
     """
     try:
         response = model.generate_content([system_prompt, text_prompt])
@@ -138,16 +138,20 @@ for message in st.session_state.messages:
     with st.chat_message(message["role"]):
         st.markdown(message["content"])
 
-if prompt := st.chat_input("Input command (e.g., 'Add task to Notion' or 'Add event to calendar')"):
+if prompt := st.chat_input("Input command (e.g., 'notion task ...' or 'calendar schedule ...')"):
     st.session_state.messages.append({"role": "user", "content": prompt})
     with st.chat_message("user"):
         st.markdown(prompt)
 
     with st.chat_message("assistant"):
         response_text = ""
+        prompt_lower = prompt.lower()
 
-        # --- Logic branches ---
-        if notion and ("notion" in prompt.lower() or "タスク" in prompt): # "タスク" is Japanese, but it's in a string, which is fine
+        # --- ★★★ FIX: Changed Japanese triggers to English ★★★ ---
+        # --- You must now use English keywords to trigger actions ---
+
+        # Logic branch 1: Notion
+        if notion and ("notion" in prompt_lower or "task" in prompt_lower): 
             st.info("Connecting to Notion...")
             extraction_prompt = f"Extract task name from: {prompt}"
             try:
@@ -160,7 +164,8 @@ if prompt := st.chat_input("Input command (e.g., 'Add task to Notion' or 'Add ev
             except Exception as e:
                 response_text = f"Gemini task extraction failed: {e}"
 
-        elif gcal_service and ("カレンダー" in prompt or "予定" in prompt or "calendar" in prompt or "schedule" in prompt):
+        # Logic branch 2: Google Calendar
+        elif gcal_service and ("calendar" in prompt_lower or "schedule" in prompt_lower or "event" in prompt_lower):
             st.info("Connecting to Google Calendar...")
             event_details = parse_event_with_gemini(gemini_model, prompt)
             if event_details:
@@ -172,6 +177,7 @@ if prompt := st.chat_input("Input command (e.g., 'Add task to Notion' or 'Add ev
             else:
                 response_text = "Failed to parse event. Please be more specific about the date and time."
 
+        # Logic branch 3: General Chat
         elif gemini_model:
             try:
                 response = gemini_model.generate_content(prompt)
