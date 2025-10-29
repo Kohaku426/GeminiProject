@@ -66,17 +66,38 @@ except Exception as e:
     st.stop()
 
 
-# --- Notion連携関数 (変更なし) ---
-def add_task_to_notion(task_name):
+# --- Notion Function (Modified for Due Date) ---
+def add_task_to_notion(task_name, due_date=None): # Added due_date parameter
     if not notion: return False
     try:
+        # ★★★ ↓↓↓ あなたのNotionの日付プロパティの名前に書き換えてください ↓↓↓ ★★★
+        date_property_name = "日付" 
+        # ★★★ ↑↑↑ 例: もしプロパティ名が「期日」なら "期日" にする ↑↑↑ ★★★
+        
+        properties_payload = {
+            "Name": { "title": [ { "text": { "content": task_name } } ] }
+        }
+        
+        # Add date property if due_date exists
+        if due_date:
+            try:
+                # Validate date format (optional but recommended)
+                datetime.datetime.strptime(due_date, '%Y-%m-%d') 
+                properties_payload[date_property_name] = {
+                    "date": {
+                        "start": due_date # Needs YYYY-MM-DD format
+                    }
+                }
+            except ValueError:
+                st.warning(f"Invalid date format received: {due_date}. Adding task without due date.")
+                
         notion.pages.create(
             parent={"database_id": NOTION_DB_ID},
-            properties={ "名前": { "title": [ { "text": { "content": task_name } } ] } }
+            properties=properties_payload # Use updated properties
         )
         return True
     except Exception as e:
-        st.error(f"Notionへのタスク追加に失敗: {e}")
+        st.error(f"Notion task failed: {e}")
         return False
 
 # --- Googleカレンダー連携関数 (サービスアカウント用に変更) ---
